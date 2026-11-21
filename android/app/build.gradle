@@ -1,0 +1,114 @@
+// The Chaquopy plugin locates the Android Gradle plugin by scanning THIS
+// module's buildscript classpath, so AGP (and Chaquopy itself) must be
+// declared here even though they're also declared in settings.gradle.
+// (Without this, `apply plugin: 'com.chaquo.python'` fails with
+// "Failed to find plugin com.android.tools.build:gradle".)
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://chaquo.com/maven" }
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.9.1"
+        classpath "com.chaquo.python:gradle:16.1.0"
+    }
+}
+
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+// Chaquopy is loaded from this module's buildscript classpath (declared above)
+// via the classic `apply` form — the `plugins {}` DSL can't resolve plugins
+// from a buildscript block in the same file.
+apply plugin: "com.chaquo.python"
+
+android {
+    namespace = "com.example.appletv_remote"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_11.toString()
+    }
+
+    defaultConfig {
+        applicationId = "com.example.appletv_remote"
+        minSdk = 24
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+
+        // 64-bit ABIs only (arm64 for real devices, x86_64 for the emulator).
+        // Chaquopy requires explicit abiFilters.
+        ndk {
+            abiFilters = ["arm64-v8a", "x86_64"]
+        }
+    }
+
+    buildTypes {
+        release {
+            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Replace with your own signing config before publishing.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+}
+
+chaquopy {
+    defaultConfig { py ->
+        // Python version embedded in the APK. Chaquopy's pip runs under the
+        // build Python (the `python` on PATH), so this must match its minor
+        // version (3.10 here). cp310 Chaquopy wheels exist for all of pyatv's
+        // binary dependencies (cryptography, aiohttp, miniaudio).
+        // NOTE: must be assigned via `py.version` — a bare `version = "3.10"`
+        // would bind to Project.version because of Groovy closure resolution.
+        py.version = "3.10"
+
+        py.pip {
+            // pyatv — Apple TV control library.
+            //
+            // Version notes (these pins are load-bearing):
+            // - pyatv 0.15+ requires cryptography>=43, but the newest
+            //   cryptography with a Chaquopy Android wheel is 42.0.8, so we
+            //   pin pyatv==0.14.5 (needs cryptography>=36) + cryptography 42.0.8.
+            // - aiohttp/miniaudio resolve to the newest Chaquopy Android wheels.
+            // - zeroconf, protobuf, pydantic, mediafile etc. are pure-Python
+            //   and install from PyPI.
+            install "pyatv==0.14.5"
+            install "cryptography==42.0.8"
+            // pydantic v2 needs pydantic-core (Rust) which has no Android
+            // wheel; pyatv 0.14.x works fine with pydantic v1 (pure Python).
+            install "pydantic>=1.10.10,<2"
+            // srptools 2.0 changed SRPClientSession's API, breaking pyatv 0.14.x.
+            install "srptools==1.0.1"
+        }
+    }
+
+    // src/main/python is the default source dir; declared explicitly for clarity.
+    sourceSets {
+        getByName("main") {
+            srcDir "src/main/python"
+        }
+    }
+}
+
+dependencies {
+    // Note: no explicit Chaquopy runtime dependency needed — the plugin
+    // injects its Python runtime artifacts automatically.
+    // Runs blocking pyatv calls off the main thread.
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+}
+
+flutter {
+    source = "../.."
+}
