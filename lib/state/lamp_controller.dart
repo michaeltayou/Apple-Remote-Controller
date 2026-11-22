@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,96 +7,89 @@ import '../services/lamp_service.dart';
 
 enum LampReachability { unknown, online, offline }
 
-/// State for the living-room lamp (FL216 controller box).
+/// State wrapper for the bedroom lamp (ESPHome native API, see
+/// [LampService]). Adapts the service's ValueListenable-style API to the
+/// app's ChangeNotifier pattern — widgets watch this controller.
 ///
-/// The box tracks no state — brightness/kelvin are relative steps and even
-/// on/off is just a button press — so the lamp's power state is tracked
-/// locally (persisted) from the user's last action.
+/// The lamp reports nothing back: only the optimistic boolean [isOn] exists,
+/// updated by the service immediately after a power command is sent.
 class LampController extends ChangeNotifier {
-  static const _kBaseUrlKey = 'lamp_base_url';
-  static const _kIsOnKey = 'lamp_is_on';
-  static const defaultBaseUrl = 'http://lampe.local';
+  static const _kHostKey = 'lamp_host';
+  static const defaultHost = 'lampe-chambre.local';
 
   final LampService service;
 
   LampReachability reachability = LampReachability.unknown;
-  bool isOn = false;
   String? statusMessage;
 
   LampController({LampService? service})
-      : service = service ??
-            LampService(defaultBaseUrl,
-                fallbackUrl: 'http://192.168.1.92') {
+      : service = service ?? LampService(defaultHost) {
+    this.service.status.addListener(_syncFromService);
+    this.service.lampOn.addListener(_syncFromService);
+    this.service.lastError.addListener(_syncFromService);
     _init();
   }
 
+  bool get isOn => service.lampOn.value;
+  String get host => service.host;
+
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
-    isOn = prefs.getBool(_kIsOnKey) ?? false;
-    service.baseUrl = prefs.getString(_kBaseUrlKey) ?? defaultBaseUrl;
+    final saved = prefs.getString(_kHostKey);
+    if (saved != null && saved.isNotEmpty) service.configure(host: saved);
     notifyListeners();
     ping();
   }
 
-  String get baseUrl => service.baseUrl;
+  void _syncFromService() {
+    reachability = switch (service.status.value) {
+      LampConnectionStatus.ready => LampReachability.online,
+      LampConnectionStatus.error => LampReachability.offline,
+      LampConnectionStatus.connecting => LampReachability.unknown,
+      LampConnectionStatus.disconnected => LampReachability.unknown,
+    };
+    statusMessage = service.lastError.value;
+    notifyListeners();
+  }
 
-  Future<void> setBaseUrl(String url) async {
-    var cleaned = url.trim();
-    if (cleaned.isEmpty) cleaned = defaultBaseUrl;
-    if (!cleaned.startsWith('http')) cleaned = 'http://$cleaned';
-    service.baseUrl = cleaned;
+  Future<void> setHost(String host) async {
+    service.configure(host: host);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kBaseUrlKey, cleaned);
+    await prefs.setString(_kHostKey, service.host);
     reachability = LampReachability.unknown;
     statusMessage = null;
     notifyListeners();
     ping();
   }
 
-  /// Reachability check against GET /api/status.
+  /// Handshake-only reachability check.
   Future<void> ping() async {
-    try {
-      final s = await service.status();
-      reachability = LampReachability.online;
-      statusMessage = 'Lamp box online · ${s.ip} · ${s.rssi} dBm';
-    } catch (e) {
-      reachability = LampReachability.offline;
-      statusMessage = 'Lamp box unreachable — same Wi-Fi as the lamp?';
-    }
+    final ok = await service.testConnection();
+    reachability = ok ? LampReachability.online : LampReachability.offline;
+    statusMessage = ok ? null : 'Lamp unreachable — same Wi-Fi as the lamp?';
     notifyListeners();
   }
 
-  Future<void> _runCommand(Future<void> Function() command) async {
-    try {
-      await command();
-      // Any successful command implies the box is reachable.
-      if (reachability != LampReachability.online) {
-        reachability = LampReachability.online;
-        statusMessage = null;
-        notifyListeners();
-      }
-    } catch (e) {
-      reachability = LampReachability.offline;
-      statusMessage = e.toString();
-      notifyListeners();
-    }
-  }
-
-  /// Toggles power from the last known state (default: assume off).
+  /// Toggles power from the last known (optimistic) state.
   Future<void> power() async {
     HapticFeedback.lightImpact();
-    final turningOn = !isOn;
-    await _runCommand(() => turningOn ? service.on() : service.off());
-    if (reachability == LampReachability.online) {
-      isOn = turningOn;
-      notifyListeners();
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_kIsOnKey, isOn);
+    if (isOn) {
+      await service.turnOff();
+    } else {
+      await service.turnOn();
     }
   }
 
-  Future<void> brightnessUp() => _runCommand(service.lumUp);
-  Future<void> brightnessDown() => _runCommand(service.lumDown);
-  Future<void> warmer() => _runCommand(service.kelvinUp);
-  Future<void> cooler() => _runCommand(service.kelvinDown);
+  Future<void> brightnessUp() => service.brightnessUp();
+  Future<void> brightnessDown() => service.brightnessDown();
+  Future<void> warmer() => service.kelvinUp();
+  Future<void> cooler() => service.kelvinDown();
+
+  @override
+  void dispose() {
+    service.status.removeListener(_syncFromService);
+    service.lampOn.removeListener(_syncFromService);
+    service.lastError.removeListener(_syncFromService);
+    super.dispose();
+  }
 }

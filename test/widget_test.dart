@@ -1,6 +1,5 @@
 import 'package:appletv_remote/main.dart';
 import 'package:appletv_remote/models/apple_tv_device.dart';
-import 'package:appletv_remote/models/lamp_status.dart';
 import 'package:appletv_remote/services/atv_service.dart';
 import 'package:appletv_remote/services/lamp_service.dart';
 import 'package:appletv_remote/state/lamp_controller.dart';
@@ -53,23 +52,26 @@ class FakeAtvService extends AtvService {
 }
 
 class FakeLampService extends LampService {
-  FakeLampService() : super('http://test.local');
+  FakeLampService() : super('test.local');
 
   @override
-  Future<void> on() async {}
+  Future<void> turnOn() async => lampOn.value = true;
   @override
-  Future<void> off() async {}
+  Future<void> turnOff() async => lampOn.value = false;
   @override
-  Future<void> lumUp() async {}
+  Future<void> brightnessUp() async {}
   @override
-  Future<void> lumDown() async {}
+  Future<void> brightnessDown() async {}
   @override
   Future<void> kelvinUp() async {}
   @override
   Future<void> kelvinDown() async {}
   @override
-  Future<LampStatus> status() async =>
-      const LampStatus(ip: '10.0.0.1', rssi: -50, uptimeSeconds: 60);
+  Future<void> pair() async {}
+  @override
+  Future<void> refreshEntities() async {}
+  @override
+  Future<bool> testConnection() async => true;
 }
 
 Future<void> pumpApp(WidgetTester tester, RemoteController controller) async {
@@ -110,7 +112,7 @@ void main() {
     await tester.tap(find.text('Lamp'));
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('Living Room Lamp'), findsOneWidget);
+    expect(find.text('Bedroom Lamp'), findsOneWidget);
     expect(find.byIcon(Icons.lightbulb), findsWidgets);
     expect(find.text('Brightness'), findsOneWidget);
     expect(find.text('Warmth'), findsOneWidget);

@@ -5,11 +5,11 @@ import '../state/lamp_controller.dart';
 import '../theme.dart';
 import '../widgets/remote_circle_button.dart';
 
-/// Living-room lamp controller (FL216 ESP8266 box).
+/// Bedroom lamp controller (NodeMCU ESP8266, ESPHome native API).
 ///
-/// Power toggle + brightness / color-temperature steps. The box only knows
-/// button presses, so steps use hold-to-repeat — throttled to ~3 calls/sec
-/// as required by the device's API.
+/// Power toggle + brightness / color-temperature steps. The board only
+/// knows physical button presses, so steps use hold-to-repeat — throttled
+/// to >= 300 ms between presses as required by the device.
 class LampScreen extends StatelessWidget {
   /// Repeat cadence for step buttons — within the device's ~3-4 calls/sec.
   static const _stepRepeat = Duration(milliseconds: 350);
@@ -22,7 +22,7 @@ class LampScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Living Room Lamp'),
+        title: const Text('Bedroom Lamp'),
         actions: [
           IconButton(
             tooltip: 'Refresh connection',
@@ -86,7 +86,8 @@ class LampScreen extends StatelessWidget {
               padding: EdgeInsets.symmetric(horizontal: 8),
               child: Text(
                 'Brightness and warmth adjust in steps — hold a button to '
-                'keep stepping, like the original remote.',
+                'keep stepping. The board does not report levels back, so '
+                'only on/off is shown.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.textDim, fontSize: 12),
               ),
@@ -98,19 +99,19 @@ class LampScreen extends StatelessWidget {
   }
 
   Future<void> _showSettings(BuildContext context, LampController lamp) async {
-    final controller = TextEditingController(text: lamp.baseUrl);
+    final controller = TextEditingController(text: lamp.host);
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: const Text('Lamp box address'),
+        title: const Text('Lamp address'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Base URL of the ESP8266 lamp controller on your Wi-Fi. '
-              'mDNS name or IP both work.',
+              'Hostname or IP of the ESPHome lamp board on your Wi-Fi. '
+              'mDNS (.local) names and plain IPs both work.',
               style: TextStyle(color: AppColors.textDim, fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -119,7 +120,7 @@ class LampScreen extends StatelessWidget {
               keyboardType: TextInputType.url,
               autocorrect: false,
               decoration: const InputDecoration(
-                hintText: 'http://lampe.local',
+                hintText: 'lampe-chambre.local',
                 filled: true,
                 fillColor: AppColors.button,
                 border: OutlineInputBorder(
@@ -144,7 +145,7 @@ class LampScreen extends StatelessWidget {
       ),
     );
     if (result != null && result.isNotEmpty) {
-      await lamp.setBaseUrl(result);
+      await lamp.setHost(result);
     }
   }
 }
