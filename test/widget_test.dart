@@ -1,6 +1,9 @@
 import 'package:appletv_remote/main.dart';
 import 'package:appletv_remote/models/apple_tv_device.dart';
+import 'package:appletv_remote/models/lamp_status.dart';
 import 'package:appletv_remote/services/atv_service.dart';
+import 'package:appletv_remote/services/lamp_service.dart';
+import 'package:appletv_remote/state/lamp_controller.dart';
 import 'package:appletv_remote/state/remote_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -49,12 +52,37 @@ class FakeAtvService extends AtvService {
   Future<void> sendText(String text) async {}
 }
 
+class FakeLampService extends LampService {
+  FakeLampService() : super('http://test.local');
+
+  @override
+  Future<void> on() async {}
+  @override
+  Future<void> off() async {}
+  @override
+  Future<void> lumUp() async {}
+  @override
+  Future<void> lumDown() async {}
+  @override
+  Future<void> kelvinUp() async {}
+  @override
+  Future<void> kelvinDown() async {}
+  @override
+  Future<LampStatus> status() async =>
+      const LampStatus(ip: '10.0.0.1', rssi: -50, uptimeSeconds: 60);
+}
+
 Future<void> pumpApp(WidgetTester tester, RemoteController controller) async {
   // Pre-seed the device list so the test doesn't depend on init timing.
   await controller.scan();
   await tester.pumpWidget(
-    ChangeNotifierProvider<RemoteController>.value(
-      value: controller,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<RemoteController>.value(value: controller),
+        ChangeNotifierProvider<LampController>(
+          create: (_) => LampController(service: FakeLampService()),
+        ),
+      ],
       child: const AtvRemoteApp(),
     ),
   );
@@ -71,6 +99,21 @@ void main() {
 
     expect(find.text('Apple TV Remote'), findsOneWidget);
     expect(find.text('Living Room Apple TV'), findsOneWidget);
+    controller.dispose();
+  });
+
+  testWidgets('lamp tab shows lamp controls', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final controller = RemoteController(service: FakeAtvService());
+    await pumpApp(tester, controller);
+
+    await tester.tap(find.text('Lamp'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('Living Room Lamp'), findsOneWidget);
+    expect(find.byIcon(Icons.lightbulb), findsWidgets);
+    expect(find.text('Brightness'), findsOneWidget);
+    expect(find.text('Warmth'), findsOneWidget);
     controller.dispose();
   });
 
