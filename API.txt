@@ -1,0 +1,131 @@
+# FL216 Lamp Controller — HTTP API Reference
+
+Device: NodeMCU ESP8266 with 7 optocouplers wired to a FL216 lamp remote control (one per button: power, brightness, color temperature, pairing).
+
+Purpose: lets an app send the same "button presses" to the lamp that a human would do on the remote.
+
+## Connection
+
+| Item | Value |
+|---|---|
+| Protocol | HTTP (plain text, no TLS) |
+| Port | 80 |
+| Auth | none |
+| Base URL (current) | `http://192.168.1.92` |
+| Base URL (mDNS) | `http://lampe.local` — works if the client supports mDNS (most phones/PCs on the same network do) |
+| Network | Device and client must be on the same local network (2.4 GHz WiFi: `Freebox-1B11CD`) |
+
+The IP is assigned by DHCP and can change after a router reboot. For production use, either resolve `lampe.local`, or assign a fixed IP to the device in the router (Freebox: freebox OS → Périphériques → assign static lease).
+
+## Conventions
+
+- All endpoints are **GET** (including commands — the device accepts GET-with-side-effect by design).
+- Every response has `Content-Type: application/json`.
+- Each command call performs one **150 ms button press**. One press = one step (e.g. one brightness level up). There is no "set to level X" — repeat the call to repeat the press.
+- The device does **not** track lamp state. Brightness/kelvin are relative steps only.
+- Calls are synchronous: the response arrives after the 150 ms press finished. Expect ~200–400 ms round-trip on LAN.
+
+## Commands
+
+### Action endpoints
+
+`GET /api/on` — turn lamp on
+`GET /api/off` — turn lamp off
+`GET /api/lumup` — brightness +1 step
+`GET /api/lumdown` — brightness −1 step
+`GET /api/kup` — color temperature +1 step (warmer)
+`GET /api/kdown` — color temperature −1 step (cooler)
+`GET /api/pair` — pairing button (only works once a resistor is added on D8)
+
+**Success response** — HTTP 200:
+
+```json
+{"ok": true, "cmd": "on"}
+```
+
+`cmd` is the canonical command name (`lumup`/`lumdown`/`kup`/`kdown` normalize to `lum+`/`lum-`/`k+`/`k-`).
+
+### Generic command endpoint
+
+`GET /api/cmd?c=<command>`
+
+Accepts any command name:
+
+| Value of `c` | Effect |
+|---|---|
+| `on` or `1` | turn on |
+| `off` or `0` | turn off |
+| `lum+`, `lumup` or `+` | brightness +1 |
+| `lum-`, `lumdown` or `-` | brightness −1 |
+| `k+` or `kup` | kelvin +1 |
+| `k-` or `kdown` | kelvin −1 |
+| `pair` | pairing |
+
+Warning: `+` must be URL-encoded in a query string (`c=lum%2B`), otherwise it arrives as a space. Prefer the dedicated `/api/lumup` style endpoints to avoid encoding issues.
+
+### Status
+
+`GET /api/status` — device health, useful as a "is the lamp box reachable" ping:
+
+```json
+{"ip": "192.168.1.92", "rssi": -65, "uptime_s": 1234}
+```
+
+- `ip` — device's LAN IP (verify it hasn't changed)
+- `rssi` — WiFi signal strength in dBm (below −80 is weak)
+- `uptime_s` — seconds since boot
+
+## Errors
+
+| HTTP | Body | When |
+|---|---|---|
+| 400 | `{"ok": false, "error": "unknown command"}` | `/api/cmd?c=...` with an unrecognized value |
+| 400 | `{"ok": false, "error": "missing parameter c"}` | `/api/cmd` without the `c` parameter |
+| 404 | `{"ok": false, "error": "not found"}` | any other path |
+| (no response / timeout) | — | device offline, wrong IP, or client not on same network |
+
+## Other endpoint
+
+`GET /` — human-facing web page with buttons (not part of the API; safe to ignore in an app).
+
+## Integration notes for the implementing AI
+
+1. Make the base URL configurable; default `http://lampe.local`, fall back to `http://192.168.1.92`.
+2. On app start (or before first command), call `GET /api/status` to confirm reachability; show "lamp box offline" on timeout.
+3. Map UI actions to the dedicated endpoints (`/api/on`, `/api/lumup`, …) — do not build URLs with `+`/`-` in query strings.
+4. To change brightness by N steps, call `/api/lumup` (or `/api/lumdown`) N times with a short pause (~300 ms) between calls.
+5. Keep the small delay between calls; the device is a microcontroller, not a server — do not fire requests in parallel, and keep volume low (a user sliding a brightness slider should send at most ~3–4 calls/second).
+6. The device also accepts commands on USB serial at 115200 baud (same names); that path can be used for wired debugging.
+
+## Examples
+
+Python:
+
+```python
+import requests
+
+BASE = "http://lampe.local"          # or "http://192.168.1.92"
+
+requests.get(f"{BASE}/api/on", timeout=5)
+for _ in range(3):                   # brightness +3 steps
+    requests.get(f"{BASE}/api/lumup", timeout=5)
+    time.sleep(0.3)
+status = requests.get(f"{BASE}/api/status", timeout=5).json()
+```
+
+JavaScript (fetch):
+
+```js
+const BASE = "http://lampe.local";
+
+await fetch(`${BASE}/api/on`);
+await fetch(`${BASE}/api/lumup`);   // one brightness step
+```
+
+cURL smoke test:
+
+```bash
+curl http://lampe.local/api/status
+curl http://lampe.local/api/on
+curl http://lampe.local/api/off
+```

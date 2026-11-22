@@ -47,24 +47,30 @@ class _TouchpadState extends State<Touchpad> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 280,
-      height: 280,
-      decoration: BoxDecoration(
-        color: AppColors.button,
+    return Material(
+      color: AppColors.button,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppColors.buttonPressed, width: 2),
+        side: const BorderSide(color: AppColors.buttonPressed, width: 2),
       ),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onPanUpdate: _onPanUpdate,
-        onPanEnd: _onPanEnd,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
         onTap: () => _send('select'),
-        child: const Center(
-          child: Icon(
-            Icons.touch_app_outlined,
-            size: 40,
-            color: AppColors.textDim,
+        splashColor: Colors.white.withValues(alpha: 0.12),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanUpdate: _onPanUpdate,
+          onPanEnd: _onPanEnd,
+          child: const SizedBox(
+            width: 280,
+            height: 280,
+            child: Center(
+              child: Icon(
+                Icons.touch_app_outlined,
+                size: 40,
+                color: AppColors.textDim,
+              ),
+            ),
           ),
         ),
       ),

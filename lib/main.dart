@@ -35,18 +35,20 @@ class AtvRemoteApp extends StatelessWidget {
   }
 }
 
-/// Swaps between the scanner (disconnected) and the remote (connected).
+/// Swaps between the scanner (no session) and the remote (in a session).
+/// A dropped connection does NOT swap screens — the remote screen shows an
+/// in-place reconnect overlay until the link is back.
 class RootScreen extends StatelessWidget {
   const RootScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final status = context.select(
-      (RemoteController c) => c.status,
+    final hasSession = context.select(
+      (RemoteController c) => c.hasSession,
     );
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 250),
-      child: status == AtvStatus.connected
+      child: hasSession
           ? const RemoteScreen(key: ValueKey('remote'))
           : const ScannerScreen(key: ValueKey('scanner')),
     );

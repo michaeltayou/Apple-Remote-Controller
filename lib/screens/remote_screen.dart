@@ -1,13 +1,11 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/remote_controller.dart';
 import '../theme.dart';
 import '../widgets/dpad.dart';
 import '../widgets/keyboard_sheet.dart';
+import '../widgets/remote_circle_button.dart';
 import '../widgets/touchpad.dart';
 
 /// Dark-mode remote control UI, modeled after the Siri Remote.
@@ -18,11 +16,32 @@ class RemoteScreen extends StatefulWidget {
   State<RemoteScreen> createState() => _RemoteScreenState();
 }
 
-class _RemoteScreenState extends State<RemoteScreen> {
+class _RemoteScreenState extends State<RemoteScreen>
+    with WidgetsBindingObserver {
   bool _useTouchpad = true;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Android may freeze the process (and silently kill the socket) while
+    // backgrounded — probe/revive the link when the user comes back.
+    if (state == AppLifecycleState.resumed) {
+      context.read<RemoteController>().notifyForeground();
+    }
+  }
+
   void _press(RemoteController controller, String command) {
-    HapticFeedback.lightImpact();
     controller.sendCommand(command);
   }
 
@@ -31,13 +50,17 @@ class _RemoteScreenState extends State<RemoteScreen> {
     final controller = context.watch<RemoteController>();
     final device = controller.connectedDevice;
 
+    final reconnecting = controller.status != AtvStatus.connected;
+
     return Scaffold(
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Column(
-            children: [
-              _Header(
+        child: Stack(
+          children: [
+            SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Column(
+                children: [
+                  _Header(
                 deviceName: device?.name ?? 'Apple TV',
                 connected: controller.status == AtvStatus.connected,
                 statusMessage: controller.statusMessage,
@@ -78,9 +101,44 @@ class _RemoteScreenState extends State<RemoteScreen> {
                 onVolumeDown: () => _press(controller, 'volume_down'),
                 onMute: () => _press(controller, 'mute'),
               ),
-              const SizedBox(height: 24),
-            ],
-          ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+            // NOTE: intentionally not absorbing pointers — the power button
+            // must stay usable while reconnecting (that's how you wake the TV).
+            if (reconnecting)
+              Positioned.fill(
+                child: ColoredBox(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(
+                          color: AppColors.accent,
+                          strokeWidth: 3,
+                        ),
+                        const SizedBox(height: 16),
+                        Padding(
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 40),
+                          child: Text(
+                            controller.statusMessage ??
+                                'Reconnecting to ${device?.name ?? 'Apple TV'}…',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: AppColors.textDim,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -138,7 +196,12 @@ class _Header extends StatelessWidget {
                     (connected ? 'Connected' : 'Disconnected'),
                 style: TextStyle(
                   fontSize: 12,
-                  color: connected ? AppColors.online : AppColors.textDim,
+                  // Errors show in warning amber; healthy states green/dim.
+                  color: statusMessage != null
+                      ? const Color(0xFFFFD60A)
+                      : connected
+                          ? AppColors.online
+                          : AppColors.textDim,
                 ),
               ),
             ],
@@ -147,11 +210,15 @@ class _Header extends StatelessWidget {
         IconButton(
           tooltip: 'Keyboard input',
           icon: const Icon(Icons.keyboard),
+          splashColor: Colors.white24,
+          highlightColor: Colors.white10,
           onPressed: onKeyboard,
         ),
         IconButton(
-          tooltip: 'Sleep',
+          tooltip: 'Sleep / wake',
           icon: const Icon(Icons.power_settings_new),
+          splashColor: Colors.white24,
+          highlightColor: Colors.white10,
           onPressed: onPower,
         ),
         PopupMenuButton<String>(
@@ -273,9 +340,11 @@ class _MediaAndVolumeControls extends StatelessWidget {
         ),
         Column(
           children: [
-            _RepeatingControlButton(
+            _ControlButton(
               icon: Icons.volume_up,
-              onTrigger: onVolumeUp,
+              onPressed: onVolumeUp,
+              repeat: true,
+              small: true,
             ),
             const SizedBox(height: 8),
             _ControlButton(
@@ -284,9 +353,11 @@ class _MediaAndVolumeControls extends StatelessWidget {
               small: true,
             ),
             const SizedBox(height: 8),
-            _RepeatingControlButton(
+            _ControlButton(
               icon: Icons.volume_down,
-              onTrigger: onVolumeDown,
+              onPressed: onVolumeDown,
+              repeat: true,
+              small: true,
             ),
           ],
         ),
@@ -300,71 +371,8 @@ class _MediaAndVolumeControls extends StatelessWidget {
   }
 }
 
-/// Like [_ControlButton], but holding the button down repeats the action
-/// (~7/sec after a short delay) until released — used for volume up/down.
-class _RepeatingControlButton extends StatefulWidget {
-  final IconData icon;
-  final VoidCallback onTrigger;
-
-  static const _repeatDelay = Duration(milliseconds: 450);
-  static const _repeatInterval = Duration(milliseconds: 160);
-
-  const _RepeatingControlButton({
-    required this.icon,
-    required this.onTrigger,
-  });
-
-  @override
-  State<_RepeatingControlButton> createState() =>
-      _RepeatingControlButtonState();
-}
-
-class _RepeatingControlButtonState extends State<_RepeatingControlButton> {
-  Timer? _delayTimer;
-  Timer? _repeatTimer;
-
-  void _onTapDown(TapDownDetails _) {
-    HapticFeedback.lightImpact();
-    widget.onTrigger();
-    _delayTimer = Timer(_RepeatingControlButton._repeatDelay, () {
-      _repeatTimer = Timer.periodic(_RepeatingControlButton._repeatInterval,
-          (_) => widget.onTrigger());
-    });
-  }
-
-  void _onTapUp([Object? _]) {
-    _delayTimer?.cancel();
-    _repeatTimer?.cancel();
-    _delayTimer = null;
-    _repeatTimer = null;
-  }
-
-  @override
-  void dispose() {
-    _onTapUp();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: _onTapDown,
-      onTapUp: _onTapUp,
-      onTapCancel: () => _onTapUp(),
-      child: Material(
-        color: AppColors.button,
-        shape: const CircleBorder(),
-        child: SizedBox(
-          width: 64 * 0.75,
-          height: 64 * 0.75,
-          child: Icon(widget.icon, size: 26, color: AppColors.text),
-        ),
-      ),
-    );
-  }
-}
-
+/// Circle button with visible press feedback; [repeat] enables hold-to-repeat
+/// (volume +/-), [onLongPress] gives Home its long-press = top menu action.
 class _ControlButton extends StatelessWidget {
   final IconData icon;
   final String? label;
@@ -373,6 +381,7 @@ class _ControlButton extends StatelessWidget {
   final double size;
   final double iconSize;
   final bool small;
+  final bool repeat;
 
   const _ControlButton({
     required this.icon,
@@ -382,23 +391,19 @@ class _ControlButton extends StatelessWidget {
     this.size = 64,
     this.iconSize = 26,
     this.small = false,
+    this.repeat = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final button = Material(
-      color: AppColors.button,
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onPressed,
-        onLongPress: onLongPress,
-        child: SizedBox(
-          width: small ? size * 0.75 : size,
-          height: small ? size * 0.75 : size,
-          child: Icon(icon, size: iconSize, color: AppColors.text),
-        ),
-      ),
+    final button = RemoteCircleButton(
+      icon: icon,
+      size: small ? size * 0.75 : size,
+      iconSize: iconSize,
+      repeat: repeat,
+      repeatInterval: const Duration(milliseconds: 160),
+      onPressed: onPressed,
+      onLongPress: onLongPress,
     );
 
     if (label == null) return button;

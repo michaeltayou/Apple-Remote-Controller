@@ -78,6 +78,17 @@ class AtvService {
   Future<Map<String, dynamic>> unpair(String identifier) =>
       _invoke('unpair', {'identifier': identifier});
 
+  /// Called when the app returns to the foreground — asks the bridge to
+  /// probe the connection and revive it if the OS killed it while the app
+  /// was backgrounded. Fire-and-forget.
+  Future<void> onForeground() async {
+    try {
+      await _invoke('onForeground');
+    } catch (_) {
+      // Never let a revive attempt crash the UI.
+    }
+  }
+
   Future<void> sendCommand(String cmd) async {
     final res = await _invoke('sendCommand', {'cmd': cmd});
     if (res['ok'] != true) {

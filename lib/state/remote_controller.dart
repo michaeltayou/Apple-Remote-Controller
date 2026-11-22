@@ -175,6 +175,12 @@ class RemoteController extends ChangeNotifier {
   Future<bool> hasCredentials(String identifier) =>
       service.hasCredentials(identifier);
 
+  /// App returned to the foreground — nudge the bridge to check/revive the
+  /// connection (Android freezes background apps and their sockets).
+  Future<void> notifyForeground() async {
+    await service.onForeground();
+  }
+
   /// Disconnect and return to the scanner (switch device).
   Future<void> switchDevice() async {
     await service.disconnect();
@@ -203,6 +209,12 @@ class RemoteController extends ChangeNotifier {
       await service.sendCommand(cmd);
       if (cmd == 'power_off') await _setPowerState('off');
       if (cmd == 'power_on') await _setPowerState('on');
+      // A successful command proves the link is fine — clear any stale
+      // error that was left showing in the header.
+      if (statusMessage != null) {
+        statusMessage = null;
+        notifyListeners();
+      }
     } catch (e) {
       statusMessage = e.toString();
       notifyListeners();
@@ -240,6 +252,12 @@ class RemoteController extends ChangeNotifier {
 
   // ---------------------------------------------------------------- events
 
+  /// Whether the user is in a remote session (connected to a device, or
+  /// waiting for it to come back). Drives which screen is shown — the remote
+  /// screen stays put through reconnects; only an explicit disconnect or
+  /// device switch ends the session.
+  bool get hasSession => connectedDevice != null;
+
   void _handleEvent(Map<String, dynamic> event) {
     switch (event['type']) {
       case 'connected':
@@ -248,20 +266,21 @@ class RemoteController extends ChangeNotifier {
         notifyListeners();
         break;
       case 'connection_lost':
-        status = AtvStatus.idle;
+        // Stay on the remote screen; show an in-place reconnect overlay.
+        status = AtvStatus.connecting;
         statusMessage =
             'Connection lost — reconnecting to ${connectedDevice?.name ?? 'Apple TV'}…';
         notifyListeners();
         break;
       case 'reconnecting':
-        status = AtvStatus.idle;
-        statusMessage =
-            'Reconnecting to ${event['device'] ?? 'Apple TV'}…';
+        status = AtvStatus.connecting;
+        statusMessage = 'Reconnecting to ${event['device'] ?? 'Apple TV'}…';
         notifyListeners();
         break;
       case 'disconnected':
         connectedDevice = null;
         status = AtvStatus.idle;
+        statusMessage = null;
         notifyListeners();
         break;
       case 'power_state':

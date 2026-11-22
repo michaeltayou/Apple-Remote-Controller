@@ -113,6 +113,10 @@ class MainActivity : FlutterActivity() {
                 pyCall("get_state")
             }
 
+            "onForeground" -> runPython(result) {
+                pyCall("on_foreground")
+            }
+
             else -> result.notImplemented()
         }
     }
@@ -179,6 +183,15 @@ class MainActivity : FlutterActivity() {
         is JSONArray -> (0 until value.length()).map { jsonToJava(value.get(it)) }
         is String, is Boolean, is Int, is Long, is Double -> value
         else -> value.toString()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Android may freeze the process (and silently kill the Apple TV
+        // socket) while backgrounded — let the Python bridge probe/revive.
+        scope.launch(Dispatchers.IO) {
+            runCatching { pyModule?.callAttr("on_foreground") }
+        }
     }
 
     override fun onDestroy() {

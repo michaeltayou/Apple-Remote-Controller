@@ -383,8 +383,9 @@ def remove_credentials(identifier):
 _atv = None
 _connected_identifier = None
 _connected_name = None
+_connected_conf = None
 _auto_reconnect = False
-_reconnect_future = None
+_session = 0  # bumped on disconnect to invalidate in-flight connects
 _power_state = None  # None = unknown, otherwise PowerState name (On/Off/Idle)
 
 
@@ -408,11 +409,19 @@ def _refresh_power_state():
 
 
 class _DeviceListener:
-    """pyatv device listener — called on the event loop when the link drops."""
+    """pyatv device listener — called on the event loop when the link drops.
+
+    Only reacts while this is still the ACTIVE connection: deliberately
+    closing a superseded link also fires connection_lost, and acting on
+    those causes reconnect storms (multiple competing reconnect loops)."""
+
+    def __init__(self, atv):
+        self.atv = atv
 
     def connection_lost(self, exception):
+        if _atv is not self.atv:
+            return  # stale link we already replaced or closed — ignore
         _emit({"type": "connection_lost", "error": str(exception)})
-        _schedule_reconnect()
 
     def connection_closed(self):
         pass
@@ -429,14 +438,25 @@ async def _find_config(identifier):
 
 async def _connect_async(identifier):
     global _atv, _connected_identifier, _connected_name, _auto_reconnect
+    session = _session
     conf = await _find_config(identifier)
     if conf is None:
         raise RuntimeError("No device found for identifier: %s" % identifier)
 
+    # Establish the new link FIRST and only then drop the old one — this
+    # avoids a window where _atv is None and every command fails with
+    # "Not connected" (the source of the stuck error message).
     storage = _get_storage()
     atv = await pyatv.connect(conf, _loop, storage=storage)
+    if session != _session:
+        # The user disconnected while we were connecting — drop this link.
+        try:
+            await atv.close()
+        except Exception:
+            pass
+        raise RuntimeError("stale session")
     try:
-        atv.listener = _DeviceListener()
+        atv.listener = _DeviceListener(atv)
     except Exception:
         pass  # listener is best-effort
     try:
@@ -444,47 +464,60 @@ async def _connect_async(identifier):
     except Exception:
         pass
 
+    old = _atv
     _atv = atv
+    if old is not None and old is not atv:
+        # Detach the listener so this deliberate close doesn't fire a stale
+        # connection_lost event.
+        try:
+            old.listener = None
+        except Exception:
+            pass
+        try:
+            await old.close()
+        except Exception:
+            pass
     _refresh_power_state()
     _connected_identifier = identifier
     _connected_name = conf.name
+    _connected_conf = conf
     _auto_reconnect = True
     return {"name": conf.name, "identifier": identifier}
 
 
-def _schedule_reconnect():
-    """Fire-and-forget reconnect loop (runs on the event loop thread)."""
-    global _reconnect_future
-    if not _auto_reconnect or _connected_identifier is None:
-        return
-    if _reconnect_future is not None and not _reconnect_future.done():
-        return  # a reconnect loop is already running
+async def _tcp_probe():
+    """Liveness check: can we still open a TCP connection to the Apple TV's
+    Companion port? (metadata/power requests are unreliable on newer tvOS,
+    but reachability is what actually matters here.)"""
+    conf = _connected_conf
+    if conf is None:
+        return False
+    try:
+        host = str(conf.address)
+        service = None
+        try:
+            service = conf.get_service(Protocol.Companion)
+        except Exception:
+            service = None
+        if service is None:
+            for svc in conf.services:
+                if getattr(svc, "port", 0):
+                    service = svc
+                    break
+        port = int(getattr(service, "port", 0) or 49152)
+        await asyncio.wait_for(
+            _loop.run_in_executor(None, _tcp_connect, host, port), timeout=5
+        )
+        return True
+    except Exception:
+        return False
 
-    async def _retry():
-        delay = 2.0
-        while _auto_reconnect and _connected_identifier is not None:
-            await asyncio.sleep(delay)
-            try:
-                old = _atv
-                if old is not None:
-                    await old.close()
-                info = await _connect_async(_connected_identifier)
-                _emit({"type": "connected", "device": info})
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                _emit(
-                    {
-                        "type": "reconnecting",
-                        "device": _connected_name,
-                        "error": str(exc),
-                        "nextDelaySeconds": delay,
-                    }
-                )
-                delay = min(delay * 2, 15.0)
 
-    _reconnect_future = asyncio.run_coroutine_threadsafe(_retry(), _get_loop())
+def _tcp_connect(host, port):
+    import socket
+
+    sock = socket.create_connection((host, port), timeout=4)
+    sock.close()
 
 
 def connect_device(identifier):
@@ -498,11 +531,10 @@ def connect_device(identifier):
 
 def disconnect():
     global _atv, _connected_identifier, _connected_name, _auto_reconnect
-    global _reconnect_future
+    global _session, _connected_conf
     _auto_reconnect = False
-    if _reconnect_future is not None:
-        _reconnect_future.cancel()
-        _reconnect_future = None
+    _session += 1
+    _connected_conf = None
     identifier, _connected_identifier = _connected_identifier, None
     name, _connected_name = _connected_name, None
 
@@ -677,9 +709,46 @@ def _directed_broadcast():
 
 
 def send_command(cmd):
+    cmd = str(cmd)
     try:
-        _submit(_send_command_async(str(cmd)), timeout=20)
+        _submit(_send_command_async(cmd), timeout=20)
         return json.dumps({"ok": True})
+    except Exception as exc:
+        identifier = _connected_identifier
+        if identifier is None:
+            return json.dumps({"ok": False, "error": str(exc)})
+        # The link likely died silently while the app was backgrounded
+        # (Android freezes the process; no connection_lost is ever raised).
+        # Reconnect once and retry the command.
+        try:
+            info = _submit(_connect_async(identifier), timeout=15)
+            _emit({"type": "connected", "device": info})
+            _submit(_send_command_async(cmd), timeout=20)
+            return json.dumps({"ok": True, "reconnected": True})
+        except Exception:
+            _emit(
+                {
+                    "type": "reconnecting",
+                    "device": _connected_name,
+                    "error": str(exc),
+                }
+            )
+            return json.dumps({"ok": False, "error": str(exc)})
+
+
+def on_foreground():
+    """App resumed: probe the connection and revive it if the socket died
+    while the process was frozen in the background."""
+    try:
+        if _atv is None or _connected_identifier is None:
+            return json.dumps({"ok": True, "connected": False})
+
+        if _submit(_tcp_probe(), timeout=8):
+            return json.dumps({"ok": True, "connected": True})
+
+        info = _submit(_connect_async(_connected_identifier), timeout=15)
+        _emit({"type": "connected", "device": info})
+        return json.dumps({"ok": True, "connected": True, "reconnected": True})
     except Exception as exc:
         return json.dumps({"ok": False, "error": str(exc)})
 
