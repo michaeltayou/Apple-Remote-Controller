@@ -56,54 +56,71 @@ class _RemoteScreenState extends State<RemoteScreen>
       body: SafeArea(
         child: Stack(
           children: [
-            SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Column(
-                children: [
-                  _Header(
-                deviceName: device?.name ?? 'Apple TV',
-                connected: controller.status == AtvStatus.connected,
-                statusMessage: controller.statusMessage,
-                // Toggle: pyatv can't poll power state on newer tvOS, so we
-                // track it locally — off -> wake (incl. Wake-on-LAN), else sleep.
-                onPower: () => _press(
-                  controller,
-                  controller.powerState == 'off' ? 'power_on' : 'power_off',
+            // The navigation area (touchpad/D-Pad) is FIXED, not scrollable:
+            // swiping on the touchpad must never scroll the page — only the
+            // button area below scrolls if it doesn't fit.
+            Column(
+              children: [
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: _Header(
+                    deviceName: device?.name ?? 'Apple TV',
+                    connected: controller.status == AtvStatus.connected,
+                    statusMessage: controller.statusMessage,
+                    // Toggle: pyatv can't poll power state on newer tvOS, so we
+                    // track it locally — off -> wake (incl. Wake-on-LAN), else sleep.
+                    onPower: () => _press(
+                      controller,
+                      controller.powerState == 'off' ? 'power_on' : 'power_off',
+                    ),
+                    onKeyboard: () => showKeyboardSheet(
+                      context,
+                      onSend: controller.sendText,
+                    ),
+                    onSwitchDevice: controller.switchDevice,
+                    onUnpair: controller.unpairCurrent,
+                  ),
                 ),
-                onKeyboard: () => showKeyboardSheet(
-                  context,
-                  onSend: controller.sendText,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: _NavigationToggle(
+                    useTouchpad: _useTouchpad,
+                    onChanged: (v) => setState(() => _useTouchpad = v),
+                  ),
                 ),
-                onSwitchDevice: controller.switchDevice,
-                onUnpair: controller.unpairCurrent,
-              ),
-              const SizedBox(height: 8),
-              _NavigationToggle(
-                useTouchpad: _useTouchpad,
-                onChanged: (v) => setState(() => _useTouchpad = v),
-              ),
-              const SizedBox(height: 8),
-              _useTouchpad
-                  ? Touchpad(onCommand: controller.sendCommand)
-                  : DPad(onCommand: controller.sendCommand),
-              const SizedBox(height: 20),
-              _PrimaryControls(
-                onMenu: () => _press(controller, 'menu'),
-                onPlayPause: () => _press(controller, 'play_pause'),
-                onHome: () => _press(controller, 'home'),
-                onHomeLongPress: () => _press(controller, 'top_menu'),
-              ),
-              const SizedBox(height: 16),
-              _MediaAndVolumeControls(
-                onSkipBackward: () => _press(controller, 'skip_backward'),
-                onSkipForward: () => _press(controller, 'skip_forward'),
-                onVolumeUp: () => _press(controller, 'volume_up'),
-                onVolumeDown: () => _press(controller, 'volume_down'),
-                onMute: () => _press(controller, 'mute'),
-              ),
-                  const SizedBox(height: 24),
-                ],
-              ),
+                const SizedBox(height: 8),
+                _useTouchpad
+                    ? Touchpad(onCommand: controller.sendCommand)
+                    : DPad(onCommand: controller.sendCommand),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 20),
+                        _PrimaryControls(
+                          onMenu: () => _press(controller, 'menu'),
+                          onPlayPause: () => _press(controller, 'play_pause'),
+                          onHome: () => _press(controller, 'home'),
+                          onHomeLongPress: () => _press(controller, 'top_menu'),
+                        ),
+                        const SizedBox(height: 16),
+                        _MediaAndVolumeControls(
+                          onSkipBackward: () =>
+                              _press(controller, 'skip_backward'),
+                          onSkipForward: () =>
+                              _press(controller, 'skip_forward'),
+                          onVolumeUp: () => _press(controller, 'volume_up'),
+                          onVolumeDown: () => _press(controller, 'volume_down'),
+                          onMute: () => _press(controller, 'mute'),
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
             // NOTE: intentionally not absorbing pointers — the power button
             // must stay usable while reconnecting (that's how you wake the TV).
