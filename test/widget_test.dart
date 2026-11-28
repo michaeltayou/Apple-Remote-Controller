@@ -1,4 +1,5 @@
 import 'package:appletv_remote/main.dart';
+import 'package:appletv_remote/models/apple_tv_app.dart';
 import 'package:appletv_remote/models/apple_tv_device.dart';
 import 'package:appletv_remote/services/atv_service.dart';
 import 'package:appletv_remote/services/lamp_service.dart';
@@ -43,6 +44,15 @@ class FakeAtvService extends AtvService {
 
   @override
   Future<Map<String, dynamic>> disconnect() async => {'ok': true};
+
+  @override
+  Future<List<AppleTvApp>> listApps() async => const [
+        AppleTvApp(name: 'Netflix', bundleId: 'com.netflix.Netflix'),
+        AppleTvApp(name: 'YouTube', bundleId: 'com.google.ios.youtube'),
+      ];
+
+  @override
+  Future<void> launchApp(String bundleId) async {}
 
   @override
   Future<void> sendCommand(String cmd) async {}

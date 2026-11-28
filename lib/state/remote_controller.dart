@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/apple_tv_app.dart';
 import '../models/apple_tv_device.dart';
 import '../services/atv_service.dart';
 
@@ -261,6 +262,19 @@ class RemoteController extends ChangeNotifier {
   Future<void> sendText(String text) async {
     try {
       await service.sendText(text);
+    } catch (e) {
+      statusMessage = e.toString();
+      notifyListeners();
+    }
+  }
+
+  // ------------------------------------------------------------------- apps
+
+  Future<List<AppleTvApp>> listApps() => service.listApps();
+
+  Future<void> launchApp(AppleTvApp app) async {
+    try {
+      await service.launchApp(app.bundleId);
     } catch (e) {
       statusMessage = e.toString();
       notifyListeners();

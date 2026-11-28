@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../state/remote_controller.dart';
 import '../theme.dart';
+import '../widgets/apps_sheet.dart';
 import '../widgets/dpad.dart';
 import '../widgets/keyboard_sheet.dart';
 import '../widgets/remote_circle_button.dart';
@@ -78,6 +79,7 @@ class _RemoteScreenState extends State<RemoteScreen>
                       context,
                       onSend: controller.sendText,
                     ),
+                    onApps: () => showAppsSheet(context, controller),
                     onSwitchDevice: controller.switchDevice,
                     onUnpair: controller.unpairCurrent,
                   ),
@@ -170,6 +172,7 @@ class _Header extends StatelessWidget {
   final String? statusMessage;
   final VoidCallback onPower;
   final VoidCallback onKeyboard;
+  final VoidCallback onApps;
   final VoidCallback onSwitchDevice;
   final VoidCallback onUnpair;
 
@@ -179,6 +182,7 @@ class _Header extends StatelessWidget {
     required this.statusMessage,
     required this.onPower,
     required this.onKeyboard,
+    required this.onApps,
     required this.onSwitchDevice,
     required this.onUnpair,
   });
@@ -223,6 +227,13 @@ class _Header extends StatelessWidget {
               ),
             ],
           ),
+        ),
+        IconButton(
+          tooltip: 'Apple TV apps',
+          icon: const Icon(Icons.apps),
+          splashColor: Colors.white24,
+          highlightColor: Colors.white10,
+          onPressed: onApps,
         ),
         IconButton(
           tooltip: 'Keyboard input',

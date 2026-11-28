@@ -106,6 +106,14 @@ class MainActivity : FlutterActivity() {
                 pyCall("send_text", call.argument<String>("text"))
             }
 
+            "listApps" -> runPython(result) {
+                pyCall("list_apps")
+            }
+
+            "launchApp" -> runPython(result) {
+                pyCall("launch_app", call.argument<String>("bundleId"))
+            }
+
             "hasCredentials" -> runPython(result) {
                 pyCall("has_credentials", call.argument<String>("identifier"))
             }

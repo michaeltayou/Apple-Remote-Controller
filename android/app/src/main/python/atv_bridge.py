@@ -766,3 +766,41 @@ def send_text(text):
         return json.dumps({"ok": True})
     except Exception as exc:
         return json.dumps({"ok": False, "error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Installed apps: list + launch (Companion protocol via pyatv's Apps interface)
+# ---------------------------------------------------------------------------
+
+async def _list_apps_async():
+    atv = _atv
+    if atv is None:
+        raise RuntimeError("Not connected to an Apple TV")
+    apps = await atv.apps.app_list()
+    return [
+        {"name": a.name or a.bundle_id, "bundleId": a.bundle_id}
+        for a in apps
+    ]
+
+
+def list_apps():
+    try:
+        apps = _submit(_list_apps_async(), timeout=25)
+        return json.dumps({"ok": True, "apps": apps})
+    except Exception as exc:
+        return json.dumps({"ok": False, "error": str(exc)})
+
+
+async def _launch_app_async(bundle_id):
+    atv = _atv
+    if atv is None:
+        raise RuntimeError("Not connected to an Apple TV")
+    await atv.apps.launch_app(str(bundle_id))
+
+
+def launch_app(bundle_id):
+    try:
+        _submit(_launch_app_async(bundle_id), timeout=20)
+        return json.dumps({"ok": True})
+    except Exception as exc:
+        return json.dumps({"ok": False, "error": str(exc)})

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
+import '../models/apple_tv_app.dart';
 import '../models/apple_tv_device.dart';
 
 /// Thin typed wrapper around the Kotlin MethodChannel
@@ -114,6 +115,25 @@ class AtvService {
     final res = await _invoke('sendText', {'text': text});
     if (res['ok'] != true) {
       throw AtvException(res['error']?.toString() ?? 'Text input failed');
+    }
+  }
+
+  /// Lists launchable apps installed on the connected Apple TV.
+  Future<List<AppleTvApp>> listApps() async {
+    final res = await _invoke('listApps');
+    if (res['ok'] != true) {
+      throw AtvException(res['error']?.toString() ?? 'Could not list apps');
+    }
+    return (res['apps'] as List? ?? const [])
+        .map((e) => AppleTvApp.fromMap(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Launches an installed app by bundle id.
+  Future<void> launchApp(String bundleId) async {
+    final res = await _invoke('launchApp', {'bundleId': bundleId});
+    if (res['ok'] != true) {
+      throw AtvException(res['error']?.toString() ?? 'Could not launch app');
     }
   }
 }
