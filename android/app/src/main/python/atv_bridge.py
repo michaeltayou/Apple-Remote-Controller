@@ -34,6 +34,29 @@ import pyatv
 from pyatv.const import Protocol
 from pyatv.storage.file_storage import FileStorage
 
+# pyatv <= 0.14.5 silently ignores error responses from the Apple TV for
+# _launchApp (tvOS 26/27 return FBSOpenApplicationErrorDomain when a launch
+# fails). Wrap _send_command so launch failures surface to the user instead
+# of pretending to succeed. Verified against a real tvOS 27.2.1 device.
+try:
+    from pyatv.protocols.companion import api as _companion_api
+
+    _orig_send_command = _companion_api.CompanionAPI._send_command
+
+    async def _send_command_checked(self, identifier, content, *args, **kwargs):
+        resp = await _orig_send_command(self, identifier, content, *args, **kwargs)
+        if identifier == "_launchApp" and isinstance(resp, dict):
+            eu = resp.get("_eu") or {}
+            ec = eu.get("_ec") or resp.get("_ec")
+            if ec:
+                ed = eu.get("_ed") or resp.get("_ed") or "device error"
+                raise RuntimeError("Launch failed on the TV: %s (code %s)" % (ed, ec))
+        return resp
+
+    _companion_api.CompanionAPI._send_command = _send_command_checked
+except Exception:
+    pass  # best-effort patch; launching still works without it
+
 # ---------------------------------------------------------------------------
 # Persistent event loop (runs for the lifetime of the process)
 # ---------------------------------------------------------------------------
