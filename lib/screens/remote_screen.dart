@@ -108,11 +108,18 @@ class _RemoteScreenState extends State<RemoteScreen>
                           onHomeLongPress: () => _press(controller, 'top_menu'),
                         ),
                         const SizedBox(height: 16),
-                        _MediaAndVolumeControls(
+                        // Media transport: works system-wide inside whatever
+                        // app is playing (YouTube, Music, ...).
+                        _MediaTransport(
+                          onPrevious: () => _press(controller, 'previous'),
                           onSkipBackward: () =>
                               _press(controller, 'skip_backward'),
                           onSkipForward: () =>
                               _press(controller, 'skip_forward'),
+                          onNext: () => _press(controller, 'next'),
+                        ),
+                        const SizedBox(height: 16),
+                        _VolumeRow(
                           onVolumeUp: () => _press(controller, 'volume_up'),
                           onVolumeDown: () => _press(controller, 'volume_down'),
                           onMute: () => _press(controller, 'mute'),
@@ -341,16 +348,62 @@ class _PrimaryControls extends StatelessWidget {
   }
 }
 
-class _MediaAndVolumeControls extends StatelessWidget {
+/// Media transport: previous track, seek -10s / +10s (hold to keep
+/// seeking), next track. These are system-level media keys on the Apple TV,
+/// so they act on whatever app is currently playing.
+class _MediaTransport extends StatelessWidget {
+  final VoidCallback onPrevious;
   final VoidCallback onSkipBackward;
   final VoidCallback onSkipForward;
+  final VoidCallback onNext;
+
+  const _MediaTransport({
+    required this.onPrevious,
+    required this.onSkipBackward,
+    required this.onSkipForward,
+    required this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        _ControlButton(
+          icon: Icons.skip_previous,
+          label: 'Previous',
+          small: true,
+          onPressed: onPrevious,
+        ),
+        _ControlButton(
+          icon: Icons.replay_10,
+          label: '-10 s',
+          repeat: true,
+          onPressed: onSkipBackward,
+        ),
+        _ControlButton(
+          icon: Icons.forward_10,
+          label: '+10 s',
+          repeat: true,
+          onPressed: onSkipForward,
+        ),
+        _ControlButton(
+          icon: Icons.skip_next,
+          label: 'Next',
+          small: true,
+          onPressed: onNext,
+        ),
+      ],
+    );
+  }
+}
+
+class _VolumeRow extends StatelessWidget {
   final VoidCallback onVolumeUp;
   final VoidCallback onVolumeDown;
   final VoidCallback onMute;
 
-  const _MediaAndVolumeControls({
-    required this.onSkipBackward,
-    required this.onSkipForward,
+  const _VolumeRow({
     required this.onVolumeUp,
     required this.onVolumeDown,
     required this.onMute,
@@ -362,37 +415,24 @@ class _MediaAndVolumeControls extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         _ControlButton(
-          icon: Icons.replay_10,
-          label: 'Rewind',
-          onPressed: onSkipBackward,
-        ),
-        Column(
-          children: [
-            _ControlButton(
-              icon: Icons.volume_up,
-              onPressed: onVolumeUp,
-              repeat: true,
-              small: true,
-            ),
-            const SizedBox(height: 8),
-            _ControlButton(
-              icon: Icons.volume_off,
-              onPressed: onMute,
-              small: true,
-            ),
-            const SizedBox(height: 8),
-            _ControlButton(
-              icon: Icons.volume_down,
-              onPressed: onVolumeDown,
-              repeat: true,
-              small: true,
-            ),
-          ],
+          icon: Icons.volume_down,
+          label: 'Vol -',
+          repeat: true,
+          small: true,
+          onPressed: onVolumeDown,
         ),
         _ControlButton(
-          icon: Icons.forward_10,
-          label: 'Forward',
-          onPressed: onSkipForward,
+          icon: Icons.volume_off,
+          label: 'Mute',
+          small: true,
+          onPressed: onMute,
+        ),
+        _ControlButton(
+          icon: Icons.volume_up,
+          label: 'Vol +',
+          repeat: true,
+          small: true,
+          onPressed: onVolumeUp,
         ),
       ],
     );
