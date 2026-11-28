@@ -13,7 +13,13 @@
 /// Handshake (ESPHome 2026.x — the old Connect step was removed in 2026.1.0):
 /// open socket (10 s timeout) → HelloRequest(1)/HelloResponse(2) →
 /// if entity keys not cached: ListEntitiesRequest(11) → read responses until
-/// ListEntitiesDoneResponse(19) → command → close socket.
+/// ListEntitiesDoneResponse(19) → command.
+///
+/// PERFORMANCE: the session is PERSISTENT — one socket stays open and every
+/// press reuses it (a per-press connect/handshake/close cycle costs ~0.5-1 s
+/// and made hold-to-repeat lag badly). After >= 20 s idle a PingRequest(7)/
+/// PingResponse(8) health-check runs first; any failure drops the session
+/// and reconnects transparently.
 ///
 /// Entities are matched by EXACT name (never hardcoded keys):
 ///   Switch "Lampe"        — power
@@ -120,8 +126,14 @@ class LampService {
   Future<void> _chain = Future.value();
   DateTime _lastPress = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// Persistent session (reused across commands) + cached mDNS resolution.
+  _Session? _session;
+  String? _resolvedIp;
+  DateTime _lastCommandAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   static const _minPressGap = Duration(milliseconds: 300);
   static const _opTimeout = Duration(seconds: 12);
+  static const _idleBeforePing = Duration(seconds: 20);
 
   /// Serializes ALL operations: physical presses must never overlap and the
   /// 300 ms throttle is enforced globally here.
@@ -194,17 +206,23 @@ class LampService {
     await session.listEntities((name, key) => _entityKeys[name] = key);
   }
 
-  /// Opens a connection, runs [action], closes it — with 2 retries on
-  /// timeout/socket errors. Entity-name misses are not retried.
+  /// Runs [action] on the persistent session, opening/reconnecting it as
+  /// needed — with 2 retries on timeout/socket errors. Entity-name misses
+  /// are not retried.
   Future<void> _run(Future<void> Function(_Session session) action) async {
-    status.value = LampConnectionStatus.connecting;
     Object? lastFailure;
     for (var attempt = 0; attempt < 3; attempt++) {
-      _Session? session;
       try {
-        final address = await _resolve().timeout(const Duration(seconds: 8));
-        session = await _Session.open(address).timeout(_opTimeout);
+        // If the session sat idle for a while it may have been dropped
+        // silently — ping first so a dead link is caught BEFORE the real
+        // command instead of swallowing it.
+        if (_session != null &&
+            DateTime.now().difference(_lastCommandAt) > _idleBeforePing) {
+          await _session!.ping().timeout(const Duration(seconds: 3));
+        }
+        final session = await _ensureSession();
         await action(session).timeout(_opTimeout);
+        _lastCommandAt = DateTime.now();
         status.value = LampConnectionStatus.ready;
         lastError.value = null;
         return;
@@ -214,16 +232,36 @@ class LampService {
         rethrow; // nothing retries this
       } catch (e) {
         lastFailure = e;
-      } finally {
-        await session?.close();
+        await _dropSession();
       }
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
     }
     status.value = LampConnectionStatus.error;
     lastError.value =
         'Lamp unreachable (${lastFailure ?? 'no response'})';
     throw LampUnreachableException(lastFailure);
   }
+
+  Future<_Session> _ensureSession() async {
+    final existing = _session;
+    if (existing != null) return existing;
+    status.value = LampConnectionStatus.connecting;
+    final address =
+        _resolvedIp ??= await _resolve().timeout(const Duration(seconds: 8));
+    final session = await _Session.open(address).timeout(_opTimeout);
+    _session = session;
+    return session;
+  }
+
+  Future<void> _dropSession() async {
+    final session = _session;
+    _session = null;
+    _resolvedIp = null; // re-resolve mDNS next time (DHCP may have moved it)
+    await session?.close();
+  }
+
+  /// Closes the persistent session (call when the app is done with the lamp).
+  Future<void> dispose() => _dropSession();
 
   Future<String> _resolve() async {
     final h = _host;
@@ -289,10 +327,20 @@ class _Session {
 
   Future<void> switchSet(int key, bool on) async {
     _write(_msgSwitchCommand, _switchPayload(key, on));
+    await socket.flush();
   }
 
   Future<void> buttonPress(int key) async {
     _write(_msgButtonCommand, _buttonPayload(key));
+    await socket.flush();
+  }
+
+  /// PingRequest(7) -> PingResponse(8): cheap liveness check for the
+  /// persistent session.
+  Future<void> ping() async {
+    _write(7, const <int>[]);
+    await socket.flush();
+    await _expect(8);
   }
 
   void _write(int type, List<int> payload) {

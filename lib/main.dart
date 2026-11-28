@@ -51,6 +51,39 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _tab = 0;
+  late final RemoteController _remote;
+  late final LampController _lamp;
+
+  @override
+  void initState() {
+    super.initState();
+    _remote = context.read<RemoteController>();
+    _lamp = context.read<LampController>();
+    // Hardware volume keys: TV volume on the TV tab, lamp brightness on the
+    // Lamp tab (routed here; capture enabled only when the target is live).
+    _remote.service.onVolumeKey = (direction) {
+      if (_tab == 0) {
+        _remote.handleVolumeKey(direction);
+      } else {
+        _lamp.handleVolumeKey(direction);
+      }
+    };
+    _remote.addListener(_syncVolumeCapture);
+    _lamp.addListener(_syncVolumeCapture);
+  }
+
+  @override
+  void dispose() {
+    _remote.removeListener(_syncVolumeCapture);
+    _lamp.removeListener(_syncVolumeCapture);
+    super.dispose();
+  }
+
+  void _syncVolumeCapture() {
+    final capture = (_tab == 0 && _remote.status == AtvStatus.connected) ||
+        (_tab == 1 && _lamp.reachability == LampReachability.online);
+    _remote.service.setVolumeKeyCapture(capture);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +99,10 @@ class _HomeShellState extends State<HomeShell> {
         backgroundColor: AppColors.surface,
         indicatorColor: AppColors.accent.withValues(alpha: 0.25),
         selectedIndex: _tab,
-        onDestinationSelected: (index) => setState(() => _tab = index),
+        onDestinationSelected: (index) {
+          setState(() => _tab = index);
+          _syncVolumeCapture();
+        },
         labelTextStyle: WidgetStateProperty.all(
           const TextStyle(fontSize: 12, color: AppColors.text),
         ),

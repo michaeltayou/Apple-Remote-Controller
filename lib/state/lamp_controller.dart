@@ -42,11 +42,14 @@ class LampController extends ChangeNotifier {
   }
 
   void _syncFromService() {
+    // IMPORTANT: 'connecting' is transient (every command opens/reuses the
+    // session) — it must NOT downgrade reachability, otherwise the volume-
+    // key capture flaps off during each round-trip and key presses leak to
+    // the phone volume. Only definitive outcomes change the state.
     reachability = switch (service.status.value) {
       LampConnectionStatus.ready => LampReachability.online,
       LampConnectionStatus.error => LampReachability.offline,
-      LampConnectionStatus.connecting => LampReachability.unknown,
-      LampConnectionStatus.disconnected => LampReachability.unknown,
+      _ => reachability,
     };
     statusMessage = service.lastError.value;
     notifyListeners();
@@ -85,11 +88,33 @@ class LampController extends ChangeNotifier {
   Future<void> warmer() => service.kelvinUp();
   Future<void> cooler() => service.kelvinDown();
 
+  // ----------------------------------------------------- hardware volume keys
+
+  DateTime _lastVolKey = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Hardware volume key pressed while the Lamp tab is active (routed by the
+  /// tab shell): adjusts brightness. Throttled to respect the device's
+  /// >= 300 ms press spacing (the service queue enforces the hard limit).
+  void handleVolumeKey(String direction) {
+    if (reachability != LampReachability.online) return;
+    final now = DateTime.now();
+    if (now.difference(_lastVolKey) < const Duration(milliseconds: 350)) {
+      return;
+    }
+    _lastVolKey = now;
+    if (direction == 'up') {
+      brightnessUp();
+    } else {
+      brightnessDown();
+    }
+  }
+
   @override
   void dispose() {
     service.status.removeListener(_syncFromService);
     service.lampOn.removeListener(_syncFromService);
     service.lastError.removeListener(_syncFromService);
+    service.dispose();
     super.dispose();
   }
 }

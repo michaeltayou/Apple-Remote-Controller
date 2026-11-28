@@ -38,6 +38,10 @@ class MainActivity : FlutterActivity() {
     private lateinit var wifiManager: WifiManager
     private var pyModule: PyObject? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var channel: MethodChannel? = null
+
+    /** When true (TV tab + connected), hardware volume keys drive the TV. */
+    @Volatile private var captureVolumeKeys = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -51,10 +55,11 @@ class MainActivity : FlutterActivity() {
         // Point the Python bridge at the app-private files dir (FileStorage lives there).
         pyModule?.callAttr("set_files_dir", filesDir.absolutePath)
 
-        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
-        channel.setMethodCallHandler { call, result -> handleCall(call, result) }
+        val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        channel = ch
+        ch.setMethodCallHandler { call, result -> handleCall(call, result) }
         // Python -> Java -> Dart event forwarding (connection lost / reconnecting / connected).
-        pyModule?.callAttr("set_event_callback", EventForwarder(channel))
+        pyModule?.callAttr("set_event_callback", EventForwarder(ch))
     }
 
     // ------------------------------------------------------------------ calls
@@ -115,6 +120,11 @@ class MainActivity : FlutterActivity() {
 
             "onForeground" -> runPython(result) {
                 pyCall("on_foreground")
+            }
+
+            "setVolumeKeyCapture" -> {
+                captureVolumeKeys = call.argument<Boolean>("capture") ?: false
+                result.success(mapOf("ok" to true))
             }
 
             else -> result.notImplemented()
@@ -192,6 +202,26 @@ class MainActivity : FlutterActivity() {
         scope.launch(Dispatchers.IO) {
             runCatching { pyModule?.callAttr("on_foreground") }
         }
+    }
+
+    /**
+     * Intercept hardware volume keys while the TV tab is active and
+     * connected: forward them to Dart (-> pyatv volume_up/down) and consume
+     * them so the phone's own volume does not change.
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (captureVolumeKeys &&
+            (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP ||
+                event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN)
+        ) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                val direction =
+                    if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) "up" else "down"
+                channel?.invokeMethod("volumeKey", direction)
+            }
+            return true // consume: the phone volume must not change
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onDestroy() {

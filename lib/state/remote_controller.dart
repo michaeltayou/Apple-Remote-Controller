@@ -31,7 +31,24 @@ class RemoteController extends ChangeNotifier {
   RemoteController({AtvService? service})
       : service = service ?? AtvService() {
     _eventSub = this.service.events.listen(_handleEvent);
+    this.service.onVolumeKey = handleVolumeKey;
     _init();
+  }
+
+  // ----------------------------------------------------- hardware volume keys
+
+  DateTime _lastVolKey = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Hardware volume key pressed while the TV tab is active (routed by the
+  /// tab shell). Throttled — key auto-repeat fires very fast.
+  void handleVolumeKey(String direction) {
+    if (status != AtvStatus.connected) return;
+    final now = DateTime.now();
+    if (now.difference(_lastVolKey) < const Duration(milliseconds: 120)) {
+      return;
+    }
+    _lastVolKey = now;
+    sendCommand(direction == 'up' ? 'volume_up' : 'volume_down');
   }
 
   // ------------------------------------------------------------------ init

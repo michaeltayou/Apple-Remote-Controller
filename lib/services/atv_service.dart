@@ -18,6 +18,9 @@ class AtvService {
     _channel.setMethodCallHandler(_handleNativeEvent);
   }
 
+  /// Called when the hardware volume keys are pressed while capture is on.
+  void Function(String direction)? onVolumeKey;
+
   /// Async events pushed from Python (connected / connection_lost /
   /// reconnecting / pairing_complete) and forwarded by Kotlin.
   Stream<Map<String, dynamic>> get events => _events.stream;
@@ -31,6 +34,17 @@ class AtvService {
       } catch (_) {
         // Malformed event — ignore rather than crash the handler.
       }
+    } else if (call.method == 'volumeKey' && call.arguments is String) {
+      onVolumeKey?.call(call.arguments as String);
+    }
+  }
+
+  /// Ask native to intercept (or release) the hardware volume keys.
+  Future<void> setVolumeKeyCapture(bool capture) async {
+    try {
+      await _invoke('setVolumeKeyCapture', {'capture': capture});
+    } catch (_) {
+      // Older builds without the handler — in-app buttons still work.
     }
   }
 
