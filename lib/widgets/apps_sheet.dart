@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/apple_tv_app.dart';
 import '../state/remote_controller.dart';
@@ -6,10 +9,14 @@ import '../theme.dart';
 
 /// Bottom sheet for opening apps on the connected Apple TV.
 ///
-/// Tries the live app list first (works on older tvOS). tvOS 26/27 no longer
-/// answers the Companion app-list request (Apple-side regression, confirmed
-/// on tvOS 27.2.1), so on failure a curated grid of common apps + a custom
-/// bundle-ID field is shown — launching via _launchApp still works.
+/// tvOS 26/27 no longer answers the Companion app-list request (Apple-side
+/// regression, verified on tvOS 27.2.1), but LAUNCHING apps still works —
+/// and the TV answers differently for installed vs missing bundle IDs. So:
+/// 1. try the live list first (older tvOS);
+/// 2. otherwise offer "Detect my apps": probe a catalog of known bundle IDs
+///    (installed apps briefly open on the TV, missing ones fail silently),
+///    remember the hits, and show exactly the user's apps from then on;
+/// 3. plus a custom bundle-ID field for anything not in the catalog.
 Future<void> showAppsSheet(
   BuildContext context,
   RemoteController controller,
@@ -25,27 +32,48 @@ Future<void> showAppsSheet(
   );
 }
 
-class _CuratedApp {
+class _CatalogApp {
   final String name;
   final String bundleId;
   final IconData icon;
-  const _CuratedApp(this.name, this.bundleId, this.icon);
+  const _CatalogApp(this.name, this.bundleId, this.icon);
+
+  Map<String, String> toJson() => {'name': name, 'bundleId': bundleId};
 }
 
-const _curatedApps = [
-  _CuratedApp('Apple TV', 'com.apple.TVWatchList', Icons.tv),
-  _CuratedApp('Settings', 'com.apple.TVSettings', Icons.settings),
-  _CuratedApp('App Store', 'com.apple.TVAppStore', Icons.shop_2),
-  _CuratedApp('Netflix', 'com.netflix.Netflix', Icons.movie),
-  _CuratedApp('YouTube', 'com.google.ios.youtube', Icons.play_circle),
-  _CuratedApp('Disney+', 'com.disney.disneyplus', Icons.auto_awesome),
-  _CuratedApp('Prime Video', 'com.amazon.aiv.AIVApp', Icons.video_library),
-  _CuratedApp('Apple Music', 'com.apple.Music', Icons.music_note),
-  _CuratedApp('Spotify', 'com.spotify.client', Icons.graphic_eq),
-  _CuratedApp('Plex', 'com.plexapp.plex', Icons.play_arrow),
-  _CuratedApp('VLC', 'org.videolan.vlc-ios', Icons.ondemand_video),
-  _CuratedApp('Podcasts', 'com.apple.podcasts', Icons.podcasts),
+/// Known tvOS bundle IDs. Wrong guesses are harmless — detection just
+/// filters them out (the TV answers "not installed" for those).
+const _catalog = [
+  _CatalogApp('Apple TV', 'com.apple.TVWatchList', Icons.tv),
+  _CatalogApp('Settings', 'com.apple.TVSettings', Icons.settings),
+  _CatalogApp('App Store', 'com.apple.TVAppStore', Icons.shop_2),
+  _CatalogApp('Music', 'com.apple.Music', Icons.music_note),
+  _CatalogApp('Podcasts', 'com.apple.podcasts', Icons.podcasts),
+  _CatalogApp('Photos', 'com.apple.TVPhotos', Icons.photo),
+  _CatalogApp('Fitness', 'com.apple.TVFitness', Icons.fitness_center),
+  _CatalogApp('Netflix', 'com.netflix.Netflix', Icons.movie),
+  _CatalogApp('YouTube', 'com.google.ios.youtube', Icons.play_circle),
+  _CatalogApp('Disney+', 'com.disney.disneyplus', Icons.auto_awesome),
+  _CatalogApp('Prime Video', 'com.amazon.aiv.AIVApp', Icons.video_library),
+  _CatalogApp('HBO Max', 'com.hbo.hbonow', Icons.movie_creation),
+  _CatalogApp('Max', 'com.wbd.stream', Icons.movie_creation),
+  _CatalogApp('Spotify', 'com.spotify.client', Icons.graphic_eq),
+  _CatalogApp('Deezer', 'com.deezer.deezer', Icons.queue_music),
+  _CatalogApp('Plex', 'com.plexapp.plex', Icons.play_arrow),
+  _CatalogApp('VLC', 'org.videolan.vlc-ios', Icons.ondemand_video),
+  _CatalogApp('Infuse', 'com.firecore.infuse', Icons.local_movies),
+  _CatalogApp('Swiftfin', 'org.jellyfin.swiftfin', Icons.play_circle_filled),
+  _CatalogApp('Twitch', 'tv.twitch.tv', Icons.sports_esports),
+  _CatalogApp('Crunchyroll', 'com.crunchyroll.crunchyroll', Icons.animation),
+  _CatalogApp('Paramount+', 'com.cbsvideo.app', Icons.star),
+  _CatalogApp('Hulu', 'com.hulu.plus', Icons.live_tv),
+  _CatalogApp('Peacock', 'com.peacocktv.peacock', Icons.emoji_nature),
+  _CatalogApp('Molotov', 'tv.molotov', Icons.cast),
+  _CatalogApp('DAZN', 'com.dazn.theMobileApp', Icons.sports_soccer),
+  _CatalogApp('Apple Arcade', 'com.apple.TVGameCenter', Icons.videogame_asset),
 ];
+
+const _kDetectedAppsKey = 'detected_tv_apps';
 
 class _AppsSheet extends StatefulWidget {
   final RemoteController controller;
@@ -59,7 +87,17 @@ class _AppsSheet extends StatefulWidget {
 class _AppsSheetState extends State<_AppsSheet> {
   late final Future<List<AppleTvApp>> _future = widget.controller.listApps();
   final _bundleController = TextEditingController();
+
+  List<_CatalogApp> _detected = [];
+  bool _detecting = false;
+  int _detectProgress = 0;
   String? _launching;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDetected();
+  }
 
   @override
   void dispose() {
@@ -67,9 +105,70 @@ class _AppsSheetState extends State<_AppsSheet> {
     super.dispose();
   }
 
+  Future<void> _loadDetected() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_kDetectedAppsKey) ?? const [];
+    final apps = <_CatalogApp>[];
+    for (final entry in raw) {
+      try {
+        final map = jsonDecode(entry) as Map<String, dynamic>;
+        final bundleId = map['bundleId']?.toString() ?? '';
+        // Detected apps always come from the catalog, so the const icon is
+        // recovered by bundle ID (dynamic IconData would break release
+        // icon tree-shaking).
+        final known = _catalog.where((a) => a.bundleId == bundleId);
+        if (known.isNotEmpty) apps.add(known.first);
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _detected = apps);
+  }
+
+  Future<void> _saveDetected(List<_CatalogApp> apps) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _kDetectedAppsKey,
+      apps.map((a) => jsonEncode(a.toJson())).toList(),
+    );
+  }
+
+  /// Probes the catalog: launches each known bundle ID once. The TV answers
+  /// differently for installed vs missing apps, so successes = installed.
+  /// Installed apps briefly open on the TV during the scan.
+  Future<void> _detectApps() async {
+    if (_detecting) return;
+    setState(() {
+      _detecting = true;
+      _detectProgress = 0;
+    });
+    final found = <_CatalogApp>[];
+    for (var i = 0; i < _catalog.length; i++) {
+      if (!mounted) return;
+      setState(() => _detectProgress = i + 1);
+      final app = _catalog[i];
+      if (await widget.controller.tryLaunch(app.bundleId)) {
+        found.add(app);
+      }
+      // Keep probes spaced: the TV needs a moment per launch attempt.
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+    }
+    await _saveDetected(found);
+    if (!mounted) return;
+    setState(() {
+      _detecting = false;
+      _detected = found;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(found.isEmpty
+            ? 'No catalog apps detected — use a custom bundle ID below.'
+            : 'Found ${found.length} apps. Press Home on the remote to return.'),
+      ),
+    );
+  }
+
   Future<void> _launch(String name, String bundleId) async {
     if (_launching != null || bundleId.trim().isEmpty) return;
-    setState(() => _launching = bundleId);
+    setState(() => _launching = bundleId.trim());
     await widget.controller
         .launchApp(AppleTvApp(name: name, bundleId: bundleId.trim()));
     if (!mounted) return;
@@ -88,7 +187,7 @@ class _AppsSheetState extends State<_AppsSheet> {
   Widget build(BuildContext context) {
     return SafeArea(
       child: SizedBox(
-        height: MediaQuery.of(context).size.height * 0.72,
+        height: MediaQuery.of(context).size.height * 0.75,
         child: Column(
           children: [
             const SizedBox(height: 16),
@@ -123,9 +222,7 @@ class _AppsSheetState extends State<_AppsSheet> {
                   if (snapshot.hasData && snapshot.data!.isNotEmpty) {
                     return _liveList(snapshot.data!);
                   }
-                  // tvOS 26/27: the app-list request is dead — fall back to
-                  // curated launchers + custom bundle ID.
-                  return _curatedFallback();
+                  return _fallback();
                 },
               ),
             ),
@@ -170,28 +267,65 @@ class _AppsSheetState extends State<_AppsSheet> {
     );
   }
 
-  Widget _curatedFallback() {
+  Widget _fallback() {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       children: [
         const Text(
-          "Your tvOS version no longer shares the installed-app list, "
-          "so pick from the common apps below (only installed ones will "
-          "open) or enter a bundle ID.",
+          "Your tvOS version no longer shares the installed-app list. "
+          "Run detection once: the app briefly opens each known app on the "
+          "TV and keeps the ones that exist — then this grid shows exactly "
+          "your apps.",
           style: TextStyle(color: AppColors.textDim, fontSize: 12.5),
         ),
         const SizedBox(height: 12),
-        GridView.count(
-          crossAxisCount: 3,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 1.1,
-          children: [
-            for (final app in _curatedApps) _appTile(app),
-          ],
-        ),
+        if (_detecting) ...[
+          LinearProgressIndicator(
+            value: _detectProgress / _catalog.length,
+            color: AppColors.accent,
+            backgroundColor: AppColors.button,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Detecting… $_detectProgress/${_catalog.length} — watch your TV hop through installed apps',
+            style: const TextStyle(color: AppColors.textDim, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+        ] else
+          OutlinedButton.icon(
+            onPressed: _detectApps,
+            icon: const Icon(Icons.radar),
+            label: Text(_detected.isEmpty
+                ? 'Detect my apps (${_catalog.length} known apps)'
+                : 'Re-detect my apps'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.accent,
+              side: const BorderSide(color: AppColors.accent),
+            ),
+          ),
+        const SizedBox(height: 12),
+        if (_detected.isNotEmpty)
+          GridView.count(
+            crossAxisCount: 3,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 1.1,
+            children: [
+              for (final app in _detected) _appTile(app),
+            ],
+          )
+        else if (!_detecting)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(
+              child: Text(
+                'No apps detected yet.',
+                style: TextStyle(color: AppColors.textDim),
+              ),
+            ),
+          ),
         const SizedBox(height: 16),
         const Text(
           'Custom bundle ID',
@@ -231,7 +365,7 @@ class _AppsSheetState extends State<_AppsSheet> {
     );
   }
 
-  Widget _appTile(_CuratedApp app) {
+  Widget _appTile(_CatalogApp app) {
     final launching = _launching == app.bundleId;
     return Material(
       color: AppColors.button,
@@ -239,7 +373,9 @@ class _AppsSheetState extends State<_AppsSheet> {
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
         splashColor: Colors.white.withValues(alpha: 0.12),
-        onTap: launching ? null : () => _launch(app.name, app.bundleId),
+        onTap: (launching || _detecting)
+            ? null
+            : () => _launch(app.name, app.bundleId),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [

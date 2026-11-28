@@ -281,6 +281,18 @@ class RemoteController extends ChangeNotifier {
     }
   }
 
+  /// Launch attempt that reports success/failure without touching
+  /// statusMessage — used by app detection (the TV answers differently for
+  /// installed vs missing apps, so this doubles as an installed-app probe).
+  Future<bool> tryLaunch(String bundleId) async {
+    try {
+      await service.launchApp(bundleId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ---------------------------------------------------------------- events
 
   /// Whether the user is in a remote session (connected to a device, or
