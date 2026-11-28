@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/apple_tv_app.dart';
 import '../state/remote_controller.dart';
+import 'app_catalog.dart';
 import '../theme.dart';
 
 /// Bottom sheet for opening apps on the connected Apple TV.
@@ -32,49 +33,6 @@ Future<void> showAppsSheet(
   );
 }
 
-class _CatalogApp {
-  final String name;
-  final String bundleId;
-  final IconData icon;
-  const _CatalogApp(this.name, this.bundleId, this.icon);
-
-  Map<String, String> toJson() => {'name': name, 'bundleId': bundleId};
-}
-
-/// Known tvOS bundle IDs. Wrong guesses are harmless — detection just
-/// filters them out (the TV answers "not installed" for those).
-const _catalog = [
-  _CatalogApp('Apple TV', 'com.apple.TVWatchList', Icons.tv),
-  _CatalogApp('Settings', 'com.apple.TVSettings', Icons.settings),
-  _CatalogApp('App Store', 'com.apple.TVAppStore', Icons.shop_2),
-  _CatalogApp('Music', 'com.apple.Music', Icons.music_note),
-  _CatalogApp('Podcasts', 'com.apple.podcasts', Icons.podcasts),
-  _CatalogApp('Photos', 'com.apple.TVPhotos', Icons.photo),
-  _CatalogApp('Fitness', 'com.apple.TVFitness', Icons.fitness_center),
-  _CatalogApp('Netflix', 'com.netflix.Netflix', Icons.movie),
-  _CatalogApp('YouTube', 'com.google.ios.youtube', Icons.play_circle),
-  _CatalogApp('Disney+', 'com.disney.disneyplus', Icons.auto_awesome),
-  _CatalogApp('Prime Video', 'com.amazon.aiv.AIVApp', Icons.video_library),
-  _CatalogApp('HBO Max', 'com.hbo.hbonow', Icons.movie_creation),
-  _CatalogApp('Max', 'com.wbd.stream', Icons.movie_creation),
-  _CatalogApp('Max (alt)', 'com.wbd.max', Icons.movie_creation),
-  _CatalogApp('HBO (alt)', 'com.hbo.max', Icons.movie_creation),
-  _CatalogApp('Spotify', 'com.spotify.client', Icons.graphic_eq),
-  _CatalogApp('Deezer', 'com.deezer.deezer', Icons.queue_music),
-  _CatalogApp('Plex', 'com.plexapp.plex', Icons.play_arrow),
-  _CatalogApp('VLC', 'org.videolan.vlc-ios', Icons.ondemand_video),
-  _CatalogApp('Infuse', 'com.firecore.infuse', Icons.local_movies),
-  _CatalogApp('Swiftfin', 'org.jellyfin.swiftfin', Icons.play_circle_filled),
-  _CatalogApp('Twitch', 'tv.twitch.tv', Icons.sports_esports),
-  _CatalogApp('Crunchyroll', 'com.crunchyroll.crunchyroll', Icons.animation),
-  _CatalogApp('Paramount+', 'com.cbsvideo.app', Icons.star),
-  _CatalogApp('Hulu', 'com.hulu.plus', Icons.live_tv),
-  _CatalogApp('Peacock', 'com.peacocktv.peacock', Icons.emoji_nature),
-  _CatalogApp('Molotov', 'tv.molotov', Icons.cast),
-  _CatalogApp('DAZN', 'com.dazn.theMobileApp', Icons.sports_soccer),
-  _CatalogApp('Apple Arcade', 'com.apple.TVGameCenter', Icons.videogame_asset),
-];
-
 const _kDetectedAppsKey = 'detected_tv_apps';
 
 class _AppsSheet extends StatefulWidget {
@@ -89,8 +47,9 @@ class _AppsSheet extends StatefulWidget {
 class _AppsSheetState extends State<_AppsSheet> {
   late final Future<List<AppleTvApp>> _future = widget.controller.listApps();
   final _bundleController = TextEditingController();
+  final _nameController = TextEditingController();
 
-  List<_CatalogApp> _detected = [];
+  List<TvCatalogApp> _detected = [];
   bool _detecting = false;
   int _detectProgress = 0;
   String? _launching;
@@ -104,28 +63,34 @@ class _AppsSheetState extends State<_AppsSheet> {
   @override
   void dispose() {
     _bundleController.dispose();
+    _nameController.dispose();
     super.dispose();
   }
 
   Future<void> _loadDetected() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_kDetectedAppsKey) ?? const [];
-    final apps = <_CatalogApp>[];
+    final apps = <TvCatalogApp>[];
     for (final entry in raw) {
       try {
         final map = jsonDecode(entry) as Map<String, dynamic>;
         final bundleId = map['bundleId']?.toString() ?? '';
-        // Detected apps always come from the catalog, so the const icon is
-        // recovered by bundle ID (dynamic IconData would break release
-        // icon tree-shaking).
-        final known = _catalog.where((a) => a.bundleId == bundleId);
-        if (known.isNotEmpty) apps.add(known.first);
+        final name = map['name']?.toString() ?? bundleId;
+        // Catalog apps get their const icon back by bundle ID (dynamic
+        // IconData would break release icon tree-shaking); user-added apps
+        // get a generic icon.
+        final known = kTvAppCatalog.where((a) => a.bundleId == bundleId);
+        if (known.isNotEmpty) {
+          apps.add(known.first);
+        } else if (bundleId.isNotEmpty) {
+          apps.add(TvCatalogApp(name, bundleId, Icons.apps));
+        }
       } catch (_) {}
     }
     if (mounted) setState(() => _detected = apps);
   }
 
-  Future<void> _saveDetected(List<_CatalogApp> apps) async {
+  Future<void> _saveDetected(List<TvCatalogApp> apps) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(
       _kDetectedAppsKey,
@@ -146,12 +111,12 @@ class _AppsSheetState extends State<_AppsSheet> {
       _detecting = true;
       _detectProgress = 0;
     });
-    final total = _catalog.length * 2;
-    final found = <_CatalogApp>[];
-    var misses = List<_CatalogApp>.of(_catalog);
+    final total = kTvAppCatalog.length * 2;
+    final found = <TvCatalogApp>[];
+    var misses = List<TvCatalogApp>.of(kTvAppCatalog);
 
     for (var pass = 0; pass < 2 && misses.isNotEmpty; pass++) {
-      final stillMissing = <_CatalogApp>[];
+      final stillMissing = <TvCatalogApp>[];
       for (final app in misses) {
         if (!mounted) return;
         setState(() => _detectProgress++);
@@ -169,12 +134,17 @@ class _AppsSheetState extends State<_AppsSheet> {
       misses = stillMissing;
     }
 
-    await _saveDetected(found);
+    // Keep user-added apps (not from the catalog) across re-detection.
+    final userAdded = _detected
+        .where((a) => !kTvAppCatalog.any((c) => c.bundleId == a.bundleId))
+        .toList();
+    final merged = [...found, ...userAdded];
+    await _saveDetected(merged);
     if (!mounted) return;
     setState(() {
       _detecting = false;
       _detectProgress = total;
-      _detected = found;
+      _detected = merged;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -300,13 +270,13 @@ class _AppsSheetState extends State<_AppsSheet> {
         const SizedBox(height: 12),
         if (_detecting) ...[
           LinearProgressIndicator(
-            value: _detectProgress / (_catalog.length * 2),
+            value: _detectProgress / (kTvAppCatalog.length * 2),
             color: AppColors.accent,
             backgroundColor: AppColors.button,
           ),
           const SizedBox(height: 8),
           Text(
-            'Detecting… $_detectProgress/${_catalog.length * 2} — watch your TV hop through installed apps',
+            'Detecting… $_detectProgress/${kTvAppCatalog.length * 2} — watch your TV hop through installed apps',
             style: const TextStyle(color: AppColors.textDim, fontSize: 12),
           ),
           const SizedBox(height: 12),
@@ -315,7 +285,7 @@ class _AppsSheetState extends State<_AppsSheet> {
             onPressed: _detectApps,
             icon: const Icon(Icons.radar),
             label: Text(_detected.isEmpty
-                ? 'Detect my apps (${_catalog.length} known apps)'
+                ? 'Detect my apps (${kTvAppCatalog.length} known apps)'
                 : 'Re-detect my apps'),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.accent,
@@ -347,8 +317,23 @@ class _AppsSheetState extends State<_AppsSheet> {
           ),
         const SizedBox(height: 16),
         const Text(
-          'Custom bundle ID',
+          'Add an app manually (bundle ID)',
           style: TextStyle(color: AppColors.textDim, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _nameController,
+          style: const TextStyle(fontSize: 14),
+          decoration: const InputDecoration(
+            hintText: 'App name (e.g. HBO)',
+            filled: true,
+            fillColor: AppColors.button,
+            isDense: true,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.all(Radius.circular(12)),
+              borderSide: BorderSide.none,
+            ),
+          ),
         ),
         const SizedBox(height: 8),
         Row(
@@ -359,7 +344,7 @@ class _AppsSheetState extends State<_AppsSheet> {
                 autocorrect: false,
                 style: const TextStyle(fontSize: 14),
                 decoration: const InputDecoration(
-                  hintText: 'e.g. com.netflix.Netflix',
+                  hintText: 'Bundle ID (e.g. com.netflix.Netflix)',
                   filled: true,
                   fillColor: AppColors.button,
                   isDense: true,
@@ -377,14 +362,53 @@ class _AppsSheetState extends State<_AppsSheet> {
                   _launch(_bundleController.text.trim(), _bundleController.text),
               child: const Text('Open'),
             ),
+            const SizedBox(width: 8),
+            OutlinedButton(
+              onPressed: _addCustomApp,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.accent,
+                side: const BorderSide(color: AppColors.accent),
+              ),
+              child: const Text('Add'),
+            ),
           ],
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Open = launch once · Add = save it to your grid above',
+          style: TextStyle(color: AppColors.textDim, fontSize: 11.5),
         ),
         const SizedBox(height: 16),
       ],
     );
   }
 
-  Widget _appTile(_CatalogApp app) {
+  Future<void> _addCustomApp() async {
+    final bundleId = _bundleController.text.trim();
+    if (bundleId.isEmpty) return;
+    final name = _nameController.text.trim().isEmpty
+        ? bundleId
+        : _nameController.text.trim();
+    if (_detected.any((a) => a.bundleId == bundleId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That app is already in your grid.')),
+      );
+      return;
+    }
+    final updated = [..._detected, TvCatalogApp(name, bundleId, Icons.apps)];
+    await _saveDetected(updated);
+    if (!mounted) return;
+    setState(() {
+      _detected = updated;
+      _bundleController.clear();
+      _nameController.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Added $name to your apps.')),
+    );
+  }
+
+  Widget _appTile(TvCatalogApp app) {
     final launching = _launching == app.bundleId;
     return Material(
       color: AppColors.button,
