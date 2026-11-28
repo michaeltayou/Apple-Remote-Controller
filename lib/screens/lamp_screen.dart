@@ -5,7 +5,7 @@ import '../state/lamp_controller.dart';
 import '../theme.dart';
 import '../widgets/remote_circle_button.dart';
 
-/// Bedroom lamp controller (NodeMCU ESP8266, ESPHome native API).
+/// Living-room lamp controller (NodeMCU ESP8266, ESPHome native API).
 ///
 /// Power toggle + brightness / color-temperature steps. The board only
 /// knows physical button presses, so steps use hold-to-repeat — throttled
@@ -22,7 +22,7 @@ class LampScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bedroom Lamp'),
+        title: const Text('Living Room Lamp'),
         actions: [
           IconButton(
             tooltip: 'Refresh connection',

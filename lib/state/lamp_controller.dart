@@ -7,7 +7,7 @@ import '../services/lamp_service.dart';
 
 enum LampReachability { unknown, online, offline }
 
-/// State wrapper for the bedroom lamp (ESPHome native API, see
+/// State wrapper for the living-room lamp (ESPHome native API, see
 /// [LampService]). Adapts the service's ValueListenable-style API to the
 /// app's ChangeNotifier pattern — widgets watch this controller.
 ///

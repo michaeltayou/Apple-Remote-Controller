@@ -112,7 +112,7 @@ void main() {
     await tester.tap(find.text('Lamp'));
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('Bedroom Lamp'), findsOneWidget);
+    expect(find.text('Living Room Lamp'), findsOneWidget);
     expect(find.byIcon(Icons.lightbulb), findsWidgets);
     expect(find.text('Brightness'), findsOneWidget);
     expect(find.text('Warmth'), findsOneWidget);
