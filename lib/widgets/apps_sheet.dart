@@ -57,6 +57,8 @@ const _catalog = [
   _CatalogApp('Prime Video', 'com.amazon.aiv.AIVApp', Icons.video_library),
   _CatalogApp('HBO Max', 'com.hbo.hbonow', Icons.movie_creation),
   _CatalogApp('Max', 'com.wbd.stream', Icons.movie_creation),
+  _CatalogApp('Max (alt)', 'com.wbd.max', Icons.movie_creation),
+  _CatalogApp('HBO (alt)', 'com.hbo.max', Icons.movie_creation),
   _CatalogApp('Spotify', 'com.spotify.client', Icons.graphic_eq),
   _CatalogApp('Deezer', 'com.deezer.deezer', Icons.queue_music),
   _CatalogApp('Plex', 'com.plexapp.plex', Icons.play_arrow),
@@ -133,35 +135,52 @@ class _AppsSheetState extends State<_AppsSheet> {
 
   /// Probes the catalog: launches each known bundle ID once. The TV answers
   /// differently for installed vs missing apps, so successes = installed.
-  /// Installed apps briefly open on the TV during the scan.
+  ///
+  /// After a SUCCESSFUL launch the app is open on the TV — send it back Home
+  /// and wait, otherwise the next probes fire while the TV is busy switching
+  /// apps and installed apps get false negatives (this is why Music/HBO were
+  /// missed). A second pass retries all misses to absorb transient errors.
   Future<void> _detectApps() async {
     if (_detecting) return;
     setState(() {
       _detecting = true;
       _detectProgress = 0;
     });
+    final total = _catalog.length * 2;
     final found = <_CatalogApp>[];
-    for (var i = 0; i < _catalog.length; i++) {
-      if (!mounted) return;
-      setState(() => _detectProgress = i + 1);
-      final app = _catalog[i];
-      if (await widget.controller.tryLaunch(app.bundleId)) {
-        found.add(app);
+    var misses = List<_CatalogApp>.of(_catalog);
+
+    for (var pass = 0; pass < 2 && misses.isNotEmpty; pass++) {
+      final stillMissing = <_CatalogApp>[];
+      for (final app in misses) {
+        if (!mounted) return;
+        setState(() => _detectProgress++);
+        if (await widget.controller.tryLaunch(app.bundleId)) {
+          found.add(app);
+          // App is now open on the TV — go Home and let it settle before
+          // the next probe.
+          await widget.controller.sendCommand('home');
+          await Future<void>.delayed(const Duration(milliseconds: 1600));
+        } else {
+          stillMissing.add(app);
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
       }
-      // Keep probes spaced: the TV needs a moment per launch attempt.
-      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      misses = stillMissing;
     }
+
     await _saveDetected(found);
     if (!mounted) return;
     setState(() {
       _detecting = false;
+      _detectProgress = total;
       _detected = found;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(found.isEmpty
             ? 'No catalog apps detected — use a custom bundle ID below.'
-            : 'Found ${found.length} apps. Press Home on the remote to return.'),
+            : 'Found ${found.length} apps.'),
       ),
     );
   }
@@ -281,13 +300,13 @@ class _AppsSheetState extends State<_AppsSheet> {
         const SizedBox(height: 12),
         if (_detecting) ...[
           LinearProgressIndicator(
-            value: _detectProgress / _catalog.length,
+            value: _detectProgress / (_catalog.length * 2),
             color: AppColors.accent,
             backgroundColor: AppColors.button,
           ),
           const SizedBox(height: 8),
           Text(
-            'Detecting… $_detectProgress/${_catalog.length} — watch your TV hop through installed apps',
+            'Detecting… $_detectProgress/${_catalog.length * 2} — watch your TV hop through installed apps',
             style: const TextStyle(color: AppColors.textDim, fontSize: 12),
           ),
           const SizedBox(height: 12),
