@@ -7,6 +7,7 @@ import '../widgets/apps_sheet.dart';
 import '../widgets/dpad.dart';
 import '../widgets/keyboard_sheet.dart';
 import '../widgets/remote_circle_button.dart';
+import '../widgets/scrub_bar.dart';
 import '../widgets/touchpad.dart';
 
 /// Dark-mode remote control UI, modeled after the Siri Remote.
@@ -107,6 +108,10 @@ class _RemoteScreenState extends State<RemoteScreen>
                           onHome: () => _press(controller, 'home'),
                           onHomeLongPress: () => _press(controller, 'top_menu'),
                         ),
+                        const SizedBox(height: 16),
+                        // Drag-to-seek: scroll right/left to move through the
+                        // video (works in any app).
+                        ScrubBar(onCommand: controller.sendCommand),
                         const SizedBox(height: 16),
                         // Media transport: works system-wide inside whatever
                         // app is playing (YouTube, Music, ...).
